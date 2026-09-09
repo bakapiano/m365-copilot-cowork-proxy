@@ -1,14 +1,18 @@
 {
   "name": "m365-copilot-cowork-proxy",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": { "node": ">=22" },
   "scripts": {
-    "test": "node --test protocol.test.mjs",
+    "test": "node --test protocol.test.mjs auth.test.mjs",
     "doctor": "node launcher.mjs doctor",
     "test:e2e": "node e2e.mjs",
     "test:interactive": "node interactive-e2e.mjs"
+  },
+  "dependencies": {
+    "@azure/identity": "4.13.2",
+    "@azure/identity-broker": "1.4.1"
   },
   "devDependencies": { "node-pty": "1.1.0" }
 }

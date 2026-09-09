@@ -5,6 +5,11 @@ $ErrorActionPreference = 'Stop'
 $launcher = Join-Path $PSScriptRoot 'launcher.mjs'
 if (-not (Test-Path -LiteralPath $launcher)) { throw 'launcher.mjs is missing.' }
 Get-Command node -CommandType Application -ErrorAction Stop | Out-Null
+foreach ($package in @('@azure\identity', '@azure\identity-broker')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot "node_modules\$package\package.json"))) {
+        throw 'Authentication dependencies are missing. Run npm ci in this repository, then rerun install.ps1.'
+    }
+}
 
 if (-not $BinDirectory) {
     $ccp = Get-Command ccp -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -58,4 +63,4 @@ if (-not $present -and $PSCmdlet.ShouldProcess('User PATH', "Add $BinDirectory")
     $env:Path += ';' + $BinDirectory
 }
 Write-Host "[mcp] Launcher directory: $BinDirectory"
-Write-Host '[mcp] Next: mcp auth, then mcp doctor.'
+Write-Host '[mcp] Next: mcp auth (Windows sign-in), then mcp doctor. Use mcp auth --interactive to open the account picker.'

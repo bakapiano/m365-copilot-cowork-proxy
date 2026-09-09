@@ -75,6 +75,7 @@ const proxyStats = match ? JSON.parse(match[1]) : null;
 const trace = stderr.split(/\r?\n/).filter(line => line.startsWith('[mcp:trace]'));
 const report = {
   date: new Date().toISOString(), directory, durationMs: Date.now() - start, exitCode,
+  authProvider: /\[mcp\] auth=(\w+)/.exec(stderr)?.[1],
   claudeResult: result ? { isError: result.is_error, result: result.result, permissionDenials: result.permission_denials, models: Object.keys(result.modelUsage || {}) } : null,
   toolCalls, proxyStats, trace, fileVerified: false, programOutput: null,
   declaredTools: records.find(record => record.type === 'system' && record.subtype === 'init')?.tools,
@@ -82,6 +83,7 @@ const report = {
 
 try {
   assert.equal(exitCode, 0, 'Claude process must exit successfully.');
+  assert.equal(report.authProvider, process.env.MCP_AUTH || 'wam', 'Expected the selected upstream authentication provider.');
   assert.equal(result?.is_error, false, 'Claude must report success.');
   assert.ok(result.result.includes('E2E_DONE'), 'Expected final marker.');
   assert.ok(result.modelUsage?.['claude-fable-5-1'], 'Expected explicit Fable model route.');

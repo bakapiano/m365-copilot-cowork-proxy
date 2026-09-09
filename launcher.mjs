@@ -4,7 +4,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { createProxy } from './server.mjs';
-import { browserCredentials, verifyModel, runBrowserCli, tokenExpiry } from './upstream.mjs';
+import { verifyModel, runBrowserCli, tokenExpiry } from './upstream.mjs';
+import { createAuthProvider } from './auth.mjs';
 import { defaultModel, modelAliases } from './protocol.mjs';
 import { localRouting } from './routing.mjs';
 
@@ -13,25 +14,29 @@ function help() {
 
   mcp [Claude arguments...]            Start Claude with the local proxy
   mcp -Model claude-fable-5-1 [...]     Choose the Fable alias explicitly
-  mcp doctor                          Verify browser credentials and model access
-  mcp auth                            Open Cowork for normal browser sign-in
+  mcp doctor                          Verify Windows sign-in and model access
+  mcp auth                            Sign in through Windows WAM
+  mcp auth --interactive              Open the Microsoft account picker
   mcp models                          Show the routed model
   mcp -- --help                       Forward help to Claude
 
 The proxy binds only to 127.0.0.1, uses an in-memory random local key,
 and exits with Claude. Claude's own permission checks remain active.
-PLAYWRIGHT_SESSION defaults to cowork-inspect. No account token is saved.
+Authentication defaults to Windows WAM (Azure Identity/MSAL). Microsoft sign-in
+opens directly when interaction is needed. Only account metadata is saved by
+this proxy; token caching is managed by Windows. MCP_AUTH=browser selects the
+optional Playwright browser provider.
 `);
 }
 
-async function authenticate() {
+async function authenticateBrowser(auth) {
   console.error('[mcp] Opening the authorized Edge profile. Complete any browser sign-in/connection prompt.');
   try { await runBrowserCli(['snapshot'], 15000); }
   catch { await runBrowserCli(['attach', '--extension=msedge', `--session=${process.env.PLAYWRIGHT_SESSION || 'cowork-inspect'}`], 90000); }
   await runBrowserCli(['tab-new', 'https://copilot.cloud.microsoft/cowork'], 30000);
   for (let attempt = 0; attempt < 45; attempt++) {
     try {
-      const credentials = await browserCredentials();
+      const credentials = await auth.getCredentials({ force: true });
       const model = await verifyModel(credentials);
       console.log(`[mcp] Ready: ${model.displayName}; credential expires ${new Date(tokenExpiry(credentials)).toISOString()}.`);
       return;
@@ -44,11 +49,13 @@ async function authenticate() {
 async function main() {
   const args = process.argv.slice(2);
   if (['--help', '-h', 'help'].includes(args[0])) return help();
-  if (args[0] === 'auth') return authenticate();
-  const credentials = await browserCredentials();
+  const auth = createAuthProvider();
+  if (args[0] === 'auth' && auth.source === 'browser') return authenticateBrowser(auth);
+  if (args[0] === 'auth') console.error('[mcp] Signing in with Windows. Complete the Microsoft account picker or verification prompt if shown.');
+  const credentials = await auth.getCredentials({ interactive: args[0] === 'auth' && args.includes('--interactive') });
   const model = await verifyModel(credentials);
-  if (args[0] === 'doctor' || args[0] === 'models') {
-    console.log(JSON.stringify({ status: 'ok', model: defaultModel, upstream: model, credentialExpires: new Date(tokenExpiry(credentials)).toISOString() }, null, 2));
+  if (['auth', 'doctor', 'models'].includes(args[0])) {
+    console.log(JSON.stringify({ status: 'ok', auth: auth.source, account: credentials.accountName, model: defaultModel, upstream: model, credentialExpires: new Date(tokenExpiry(credentials)).toISOString() }, null, 2));
     return;
   }
   let selected = defaultModel;
@@ -69,7 +76,7 @@ async function main() {
   if (!modelAliases.has(selected)) throw new Error(`Choose model ${defaultModel}.`);
   const key = randomBytes(32).toString('hex');
   const trace = process.env.MCP_TRACE === '1';
-  const proxy = createProxy({ key, credentials, log: event => { if (trace) console.error(`[mcp:trace] ${JSON.stringify(event)}`); } });
+  const proxy = createProxy({ key, credentials, refreshCredentials: auth.getCredentials, log: event => { if (trace) console.error(`[mcp:trace] ${JSON.stringify(event)}`); } });
   const base = await proxy.listen(Number(process.env.MCP_PORT || 0));
   const routing = localRouting(base, key, selected, { bare: forwarded.includes('--bare') || process.env.CLAUDE_CODE_SIMPLE === '1' });
   const env = { ...process.env, ...routing };
@@ -78,7 +85,7 @@ async function main() {
   delete env.CLAUDE_CODE_USE_VERTEX;
   delete env.CLAUDE_CODE_USE_FOUNDRY;
   const executable = process.env.CLAUDE_CLI_PATH || join(homedir(), '.local/bin/claude.exe');
-  console.error(`[mcp] model=${selected} upstream=melon proxy=${base}`);
+  console.error(`[mcp] auth=${auth.source} model=${selected} upstream=melon proxy=${base}`);
   // Claude settings.json.env can override inherited environment variables.
   // A process-scoped settings overlay pins only routing/model values while
   // keeping normal user/project permissions, hooks and other settings intact.
@@ -105,6 +112,7 @@ async function main() {
   } finally {
     process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);
     if (trace) console.error(`[mcp:summary] ${JSON.stringify(proxy.stats)}`);
+    auth.close();
     await proxy.close();
   }
 }

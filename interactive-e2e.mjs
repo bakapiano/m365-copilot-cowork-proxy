@@ -85,9 +85,11 @@ terminal.onExit(async ({ exitCode }) => {
   try { proxyStats = summary ? JSON.parse(summary[1]) : undefined; } catch {}
   const report = {
     date: new Date().toISOString(), durationMs: Date.now() - started,
+    authProvider: /\[mcp\]\s*auth=(\w+)/.exec(text)?.[1],
     interactiveTTY: true, directory, trustedTestDirectory, promptSent: sent, expectedReply: expected,
     replyVerified: exiting, exitCode, proxyStats, blockedReason, timedOut,
-    passed: exitCode === 0 && exiting && proxyStats?.upstreamTurns >= 1 && proxyStats.errors === 0,
+    passed: exitCode === 0 && exiting && proxyStats?.upstreamTurns >= 1 && proxyStats.errors === 0
+      && /\[mcp\]\s*auth=(\w+)/.exec(text)?.[1] === (process.env.MCP_AUTH || 'wam'),
   };
   await writeFile(join(root, 'interactive-results.json'), JSON.stringify(report, null, 2), 'utf8');
   console.log(JSON.stringify(report, null, 2));

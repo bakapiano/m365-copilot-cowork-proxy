@@ -1,10 +1,10 @@
 import http from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
-import { browserCredentials, generateText, tokenExpiry } from './upstream.mjs';
+import { generateText, tokenExpiry } from './upstream.mjs';
 import { buildPrompt, decodeCompletion, completionMessage, messageEvents, defaultModel, RequestError } from './protocol.mjs';
 
 const limit = 4 * 1024 * 1024;
-export function createProxy({ key, credentials, generator = generateText, log = () => {} }) {
+export function createProxy({ key, credentials, refreshCredentials, generator = generateText, log = () => {} }) {
   if (!key || key.length < 24) throw new Error('A random local gateway key is required.');
   let currentCredentials = credentials;
   let active = 0;
@@ -78,7 +78,10 @@ export function createProxy({ key, credentials, generator = generateText, log = 
       controller = new AbortController(); controllers.add(controller);
       timer = setTimeout(() => controller.abort(), Number(process.env.MCP_UPSTREAM_TIMEOUT_MS || 180000));
       res.on('close', () => { if (!res.writableEnded) controller.abort(); });
-      if (tokenExpiry(currentCredentials) < Date.now() + 30000) currentCredentials = await browserCredentials();
+      if (tokenExpiry(currentCredentials) < Date.now() + 120000) {
+        if (!refreshCredentials) throw new Error('Fresh upstream credentials are required. Restart mcp.');
+        currentCredentials = await refreshCredentials();
+      }
       const effort = body.output_config?.effort || process.env.MCP_REASONING_EFFORT || 'medium';
       if (!['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) throw new RequestError('Unsupported reasoning effort.');
       const inputTools = (body.tools || []).map(tool => tool.name);
