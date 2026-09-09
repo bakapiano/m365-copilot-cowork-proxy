@@ -1,6 +1,10 @@
-export function localRouting(base, key, model, { bare = false } = {}) {
+import { requestTimeouts } from './timeouts.mjs';
+
+export function localRouting(base, key, model, { bare = false, upstreamTimeoutMs } = {}) {
   return {
     ANTHROPIC_BASE_URL: base,
+    // Let the gateway finish or report its own deadline before the CLI expires.
+    API_TIMEOUT_MS: String(requestTimeouts(upstreamTimeoutMs).clientTimeoutMs),
     // Normal gateway sessions use the same bearer-token path as local ccp.
     // --bare explicitly requires ANTHROPIC_API_KEY and skips normal login state.
     ANTHROPIC_AUTH_TOKEN: bare ? '' : key,

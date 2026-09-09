@@ -2,10 +2,12 @@ import http from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import { generateText, tokenExpiry } from './upstream.mjs';
 import { buildPrompt, decodeCompletion, completionMessage, messageEvents, defaultModel, RequestError } from './protocol.mjs';
+import { requestTimeouts } from './timeouts.mjs';
 
 const limit = 4 * 1024 * 1024;
-export function createProxy({ key, credentials, refreshCredentials, generator = generateText, log = () => {} }) {
+export function createProxy({ key, credentials, refreshCredentials, generator = generateText, log = () => {}, upstreamTimeoutMs = requestTimeouts().upstreamTimeoutMs }) {
   if (!key || key.length < 24) throw new Error('A random local gateway key is required.');
+  requestTimeouts(upstreamTimeoutMs);
   let currentCredentials = credentials;
   let active = 0;
   const stats = { requests: 0, upstreamTurns: 0, toolCalls: 0, toolResults: 0, errors: 0 };
@@ -45,7 +47,7 @@ export function createProxy({ key, credentials, refreshCredentials, generator = 
     if (req.method === 'GET' && url.pathname === '/v1/models') {
       return json(res, 200, { data: [{ type: 'model', id: defaultModel, display_name: 'Fable 5.1 (Cowork)', created_at: '2026-09-09T00:00:00Z' }], has_more: false, first_id: defaultModel, last_id: defaultModel });
     }
-    if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, { status: 'ok', backend: 'cowork-aether', model: 'melon' });
+    if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, { status: 'ok', backend: 'cowork-aether', model: 'melon', upstreamTimeoutMs });
     if (req.method !== 'POST' || !['/v1/messages', '/v1/messages/count_tokens'].includes(url.pathname)) {
       return json(res, 404, { type: 'error', error: { type: 'not_found_error', message: 'Unknown endpoint.' } });
     }
@@ -76,7 +78,7 @@ export function createProxy({ key, credentials, refreshCredentials, generator = 
       active++; stats.requests++;
       stats.toolResults += body.messages.flatMap(message => Array.isArray(message.content) ? message.content : []).filter(block => block.type === 'tool_result').length;
       controller = new AbortController(); controllers.add(controller);
-      timer = setTimeout(() => controller.abort(), Number(process.env.MCP_UPSTREAM_TIMEOUT_MS || 180000));
+      timer = setTimeout(() => controller.abort(), upstreamTimeoutMs);
       res.on('close', () => { if (!res.writableEnded) controller.abort(); });
       if (tokenExpiry(currentCredentials) < Date.now() + 120000) {
         if (!refreshCredentials) throw new Error('Fresh upstream credentials are required. Restart mcp.');

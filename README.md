@@ -47,6 +47,25 @@ For interactive use, change to a code directory you own and run `mcp` without
 directory. Existing running sessions keep their loaded proxy code; exit and
 start a new `mcp` session after updating this repository.
 
+Each upstream request has a **15-minute total deadline**. The launcher sets the
+Claude child's `API_TIMEOUT_MS` to **16 minutes**, including a one-minute grace
+period for the gateway to finish or report its own timeout. These settings are
+invocation-scoped. The startup banner shows `timeout=900s`; `mcp doctor` and the
+authenticated `/health` endpoint also report the configured upstream timeout.
+
+For a custom 30-minute upstream limit, set the value in milliseconds before
+starting a fresh session. The Claude child then receives a 31-minute API timeout:
+
+```powershell
+$env:MCP_UPSTREAM_TIMEOUT_MS = '1800000'
+mcp
+```
+
+The setting is a total request deadline. Streaming activity keeps the connection
+active while the configured deadline remains in effect. Existing running sessions
+keep the timeout with which they were launched. Use `mcp --resume "session-id"`
+after exiting an old session to continue its saved history with the new settings.
+
 On the existing `ccp` setup, `mcp.ps1` and `mcp.cmd` live next to its launchers in
 `%LOCALAPPDATA%\gc2cc\bin`, already on the user PATH. Other installations use the
 dedicated user-local directory described above. Existing `ccp` files, its service,
@@ -133,6 +152,9 @@ Optional environment settings:
 - `MCP_TRACE=1`: sanitized request/response metadata, never headers or prompts.
 - `MCP_REASONING_EFFORT`: fallback low, medium, high, xhigh, or max (default medium).
   Claude's request-level effort takes precedence over this fallback.
+- `MCP_UPSTREAM_TIMEOUT_MS`: total upstream request deadline in milliseconds
+  (default `900000`, or 15 minutes). The child API timeout follows this value
+  plus 60000 ms. Invalid or overflowing values are rejected at startup.
 - `MCP_PORT`: fixed loopback port; default uses an available ephemeral port.
 - `CLAUDE_CLI_PATH`: optional path to the installed Claude executable.
 
@@ -213,12 +235,15 @@ program contains the fixture marker and produces the expected output.
   `rl: ok` returned the complete JSON envelope in about one second.
 - `test:compression` checks a real compressed final event and an exact 80-line
   reply through Claude CLI, including successful stream termination.
-- Twenty-nine unit/regression tests cover WAM token validation, account selection,
+- Thirty-five unit/regression tests cover WAM token validation, account selection,
   single-flight refresh, account pinning, token-free account metadata, both local
   credential paths, helper IPC/timeout/shutdown, mixed SDK headers,
   unauthenticated connection warmup, system-context normalization, SSE framing,
   local tool translation, compressed-event decoding, malformed data, decompression
   limits, successful stream termination, and rejection of invalid credentials/tools.
+  Clock-controlled timeout regressions verify that a 273-second generation can
+  finish, the 15-minute deadline still cancels a request, and the Claude timeout
+  stays one minute ahead of the configured upstream deadline.
 
 ## References
 
