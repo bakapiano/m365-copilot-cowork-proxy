@@ -3,8 +3,12 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { promisify } from 'node:util';
+import { gunzip } from 'node:zlib';
 
 const execFileAsync = promisify(execFile);
+const gunzipAsync = promisify(gunzip);
+const maxSseFrameBytes = 1024 * 1024;
+const maxDecodedEventBytes = 4 * 1024 * 1024;
 export const upstreamOrigin = 'https://mcsaetherruntime-seas.as-ia101.gateway.prod.island.powerapps.com';
 
 // The existing, user-authorized browser request is the credential source.
@@ -123,23 +127,49 @@ export async function generateText(credentials, text, { signal, effort, onEvent 
     signal, effort,
     additionalBody: { connectorsConfig: { connectors: [], include_defaults: false, packages: [] } },
   });
-  let deltaText = '';
+  return readCompletion(turn.subscription, { onEvent });
+}
+
+export async function readCompletion(subscription, { onEvent = () => {} } = {}) {
+  let streamedCharacters = 0;
   let finalText;
   let stop;
-  for await (const event of sseEvents(turn.subscription)) {
-    onEvent(event.event);
-    if (event.event === 'dx' && typeof event.data?.t === 'string') deltaText += event.data.t;
-    if (event.event === 'fr' && typeof event.data?.content === 'string') {
+  for await (const event of sseEvents(subscription)) {
+    onEvent(event.event, { compressed: event.compressed });
+    if (event.event === 'dx' && typeof event.data?.t === 'string') streamedCharacters += event.data.t.length;
+    if (event.event === 'fr') {
+      if (typeof event.data?.content !== 'string') throw new Error('Cowork final response contained an invalid content payload.');
       finalText = event.data.content;
       stop = event.data.stop;
     }
-    if (event.event === 'rl' && event.data?.st === 'ok' && finalText !== undefined) {
-      return { text: finalText, stop, streamedCharacters: deltaText.length };
+    if (event.event === 'rl' && event.data?.st === 'ok') {
+      if (finalText === undefined) throw new Error('Cowork completed without an authoritative final response.');
+      return { text: finalText, stop, streamedCharacters };
     }
     if (['error', 'err'].includes(event.event)) throw new Error('Cowork reported an upstream generation error.');
   }
-  if (finalText !== undefined) return { text: finalText, stop, streamedCharacters: deltaText.length };
+  if (finalText !== undefined) return { text: finalText, stop, streamedCharacters };
   throw new Error('Cowork stream ended before an authoritative final response.');
+}
+
+async function decodeEventData(raw) {
+  let data;
+  try { data = JSON.parse(raw); } catch { return { data: null, compressed: false }; }
+  if (data?.compressed !== true) return { data, compressed: false };
+  const encoded = data.data;
+  if (typeof encoded !== 'string' || !encoded.length || encoded.length % 4 !== 0
+    || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) throw new Error('Cowork compressed event contained invalid Base64 data.');
+  const bytes = Buffer.from(encoded, 'base64');
+  if (bytes.toString('base64') !== encoded) throw new Error('Cowork compressed event contained invalid Base64 data.');
+  let decoded;
+  try { decoded = await gunzipAsync(bytes, { maxOutputLength: maxDecodedEventBytes }); }
+  catch (error) {
+    if (error.code === 'ERR_BUFFER_TOO_LARGE') throw new Error('Cowork decoded event exceeded the 4 MiB size limit.');
+    throw new Error('Cowork compressed event contained invalid Gzip data.');
+  }
+  try { data = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(decoded)); }
+  catch { throw new Error('Cowork compressed event contained invalid UTF-8 JSON.'); }
+  return { data, compressed: true };
 }
 
 export async function* sseEvents(response) {
@@ -153,6 +183,7 @@ export async function* sseEvents(response) {
       let separator;
       while ((separator = /\r\n\r\n|\n\n|\r\r/.exec(buffer))) {
         const block = buffer.slice(0, separator.index);
+        if (Buffer.byteLength(block) > maxSseFrameBytes) throw new Error('Upstream SSE frame exceeded the 1 MiB size limit.');
         buffer = buffer.slice(separator.index + separator[0].length);
         let event = 'message';
         let id;
@@ -164,13 +195,12 @@ export async function* sseEvents(response) {
         }
         if (data.length) {
           const raw = data.join('\n');
-          let parsed;
-          try { parsed = JSON.parse(raw); } catch { parsed = null; }
-          yield { event, id, data: parsed, raw };
+          const parsed = await decodeEventData(raw);
+          yield { event, id, ...parsed, raw };
         }
       }
       if (done) break;
-      if (buffer.length > 1024 * 1024) throw new Error('Upstream SSE frame exceeded the diagnostic size limit.');
+      if (Buffer.byteLength(buffer) > maxSseFrameBytes) throw new Error('Upstream SSE frame exceeded the 1 MiB size limit.');
     }
   } finally {
     await reader.cancel().catch(() => {});

@@ -85,14 +85,18 @@ export function createProxy({ key, credentials, refreshCredentials, generator = 
       const effort = body.output_config?.effort || process.env.MCP_REASONING_EFFORT || 'medium';
       if (!['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) throw new RequestError('Unsupported reasoning effort.');
       const inputTools = (body.tools || []).map(tool => tool.name);
-      log({ event: 'request', number: stats.requests, model: body.model, tools: inputTools, messages: body.messages.length, stream: !!body.stream });
+      log({ event: 'request', number: stats.requests, model: body.model, effort, tools: inputTools, messages: body.messages.length, stream: !!body.stream });
       if (body.stream) {
         res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-mcp-usage': 'unavailable-zero-placeholders', 'x-mcp-streaming': 'buffered-completion' });
         res.write(': Cowork request accepted by local gateway\n\n');
         ping = setInterval(() => { if (!res.destroyed) res.write('event: ping\ndata: {"type":"ping"}\n\n'); }, 8000);
       }
       stats.upstreamTurns++;
-      const upstream = await generator(currentCredentials, prompt, { signal: controller.signal, effort });
+      const upstream = await generator(currentCredentials, prompt, { signal: controller.signal, effort,
+        onEvent: (kind, metadata) => {
+          if (['fr', 'rl', 'error', 'err'].includes(kind)) log({ event: 'upstream_event', kind, compressed: metadata?.compressed === true });
+        },
+      });
       const decoded = decodeCompletion(upstream.text, body);
       const message = completionMessage(decoded, body.model);
       const proposed = message.content.filter(block => block.type === 'tool_use').map(block => block.name);

@@ -131,7 +131,8 @@ Optional environment settings:
   the code repository from which `mcp` is launched.
 - `COWORK_REQUEST_INDEX`: explicit captured request override for diagnostics.
 - `MCP_TRACE=1`: sanitized request/response metadata, never headers or prompts.
-- `MCP_REASONING_EFFORT`: low, medium, high, xhigh, or max (default medium).
+- `MCP_REASONING_EFFORT`: fallback low, medium, high, xhigh, or max (default medium).
+  Claude's request-level effort takes precedence over this fallback.
 - `MCP_PORT`: fixed loopback port; default uses an available ephemeral port.
 - `CLAUDE_CLI_PATH`: optional path to the installed Claude executable.
 
@@ -147,6 +148,10 @@ Optional environment settings:
 - Microsoft upstream: `POST /v1/messages` => `202 accepted`, followed by independent
   `/v1/subscribe` SSE. Observed `dx` carries text increments, `fr` authoritative
   final content, and `rl` with `st=ok` marks completion.
+- SSE data envelopes with `compressed: true` are Base64-decoded and Gzip-expanded
+  before event handling. Wire frames are limited to 1 MiB and decoded events to
+  4 MiB. Malformed compressed data and successful runs missing a final response
+  produce an immediate diagnostic error. The subscription closes after completion.
 - Client tools are **prompt-emulated**: the model proposes a JSON tool envelope;
   the proxy validates names against the caller's catalog and emits Anthropic
   `tool_use`. Execution and permissions belong to the local Claude CLI. Tool
@@ -169,6 +174,7 @@ Optional environment settings:
 ```powershell
 npm test
 npm run test:e2e
+npm run test:compression
 ```
 
 `npm test` runs the explicit protocol and authentication test files. For true
@@ -183,7 +189,7 @@ program contains the fixture marker and produces the expected output.
 
 ### Verified on 2026-09-09
 
-- Claude Code **2.1.229** through the installed `mcp` launcher.
+- Claude Code **2.1.266** through the installed `mcp` launcher.
 - Default WAM authentication and explicit `mcp auth --interactive` both returned
   successful model-access checks for the intended work account.
 - Text-only request: exact expected marker, one observed Fable upstream turn.
@@ -202,11 +208,17 @@ program contains the fixture marker and produces the expected output.
   workspace, enters an arithmetic prompt, verifies the answer, and exits cleanly.
   Passed in about 20 seconds with zero proxy errors (`interactive-results.json`,
   gitignored).
-- Twenty-one unit/regression tests cover WAM token validation, account selection,
+- The compressed-event fix was verified by replaying the previously stalled
+  Cowork task through the production parser: the compressed `fr` and subsequent
+  `rl: ok` returned the complete JSON envelope in about one second.
+- `test:compression` checks a real compressed final event and an exact 80-line
+  reply through Claude CLI, including successful stream termination.
+- Twenty-nine unit/regression tests cover WAM token validation, account selection,
   single-flight refresh, account pinning, token-free account metadata, both local
   credential paths, helper IPC/timeout/shutdown, mixed SDK headers,
   unauthenticated connection warmup, system-context normalization, SSE framing,
-  local tool translation, and rejection of invalid credentials/tools.
+  local tool translation, compressed-event decoding, malformed data, decompression
+  limits, successful stream termination, and rejection of invalid credentials/tools.
 
 ## References
 
