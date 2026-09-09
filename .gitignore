@@ -1,0 +1,10 @@
+.env
+.env.*
+*.log
+.e2e/
+e2e-results*.json
+interactive-results*.json
+node_modules/
+.playwright-cli/
+*.har
+*.trace

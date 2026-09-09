@@ -1,0 +1,14 @@
+{
+  "name": "m365-copilot-cowork-proxy",
+  "version": "0.1.1",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test protocol.test.mjs",
+    "doctor": "node launcher.mjs doctor",
+    "test:e2e": "node e2e.mjs",
+    "test:interactive": "node interactive-e2e.mjs"
+  },
+  "devDependencies": { "node-pty": "1.1.0" }
+}
